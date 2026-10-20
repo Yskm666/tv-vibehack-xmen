@@ -1,6 +1,6 @@
 # tv-vibehack
 
-## 本分支定制说明（Yskm666 · 小米电视 L50M5-AD）
+## 本分支定制说明（ 小米电视4A，型号L50M5-AD）
 
 本分支基于 tv-vibehack 深度定制，目标设备为 **小米电视 4A 50 寸 L50M5-AD**（代号 `xmen`，Amlogic T962 平台，Android 6.0.1 国行 PatchWall 系统），用于**顶替小米原桌面（PatchWall）**：开机直接进入干净桌面，不再有小米广告与商城。
 
