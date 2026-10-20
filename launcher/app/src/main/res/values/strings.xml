@@ -3,6 +3,7 @@
     <string name="app_name">Home</string>
     <string name="inputs">Inputs</string>
     <string name="wifi">Wi-Fi</string>
+    <string name="mirror">投屏</string>
     <string name="settings">Settings</string>
     <string name="choose_input">Inputs</string>
     <string name="connected">Connected</string>
@@ -26,4 +27,15 @@
     <string name="input_key_service_description">Opens the input switcher when the remote\'s Input button is pressed.</string>
     <string name="home_key_name">Home button</string>
     <string name="home_key_description">Makes the remote\'s Home button open this launcher.</string>
+    <string name="quick_bt">蓝牙</string>
+    <string name="quick_wifi">Wi-Fi</string>
+    <string name="quick_dim">亮度-</string>
+    <string name="quick_bright">亮度+</string>
+    <string name="quick_vol_down">音量-</string>
+    <string name="quick_vol_up">音量+</string>
+    <string name="bt_on">蓝牙已开启</string>
+    <string name="bt_off">蓝牙已关闭</string>
+    <string name="wifi_on">Wi-Fi 已开启</string>
+    <string name="wifi_off">Wi-Fi 已关闭</string>
+    <string name="brightness">亮度 %1$d%%</string>
 </resources>

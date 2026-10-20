@@ -6,6 +6,8 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
@@ -29,6 +31,7 @@ import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.view.animation.AnimationUtils;
 import android.view.animation.LayoutAnimationController;
 import android.widget.FrameLayout;
@@ -46,6 +49,11 @@ import androidx.dynamicanimation.animation.SpringForce;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -60,6 +68,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Tiles per row and dock slots (res/values/config.xml, columns). Set in onCreate. */
     static int COLUMNS = 4;
     private static final long MINUTE_MS = 60_000L;
+    /** Once per process: auto-enter the HDMI1 source shortly after boot (Xiaomi, no root). */
+    private static boolean autoEnteredSource = false;
     private String liveTvPkg;
     private String liveTvAction;
     private String sourcePanelService;
@@ -80,6 +90,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView shamsiDate;
     private boolean shamsi;
     private String vpnApp;
+    private TextView tvClock, tvAmpm, weatherView;
+    /** Tap the clock to toggle 12h/24h (per-process). */
+    private static boolean force24h = false;
+    private int weatherRefreshCounter;
+    private ImageView wallpaper;
+    private int wallpaperIndex;
+    private static final String[] WALLPAPERS = {
+            "wallpapers/wp1_1080.jpg", "wallpapers/wp2_1080.jpg",
+            "wallpapers/wp3_1080.jpg", "wallpapers/wp4_1080.jpg"
+    };
+    private static final long WALLPAPER_INTERVAL_MS = 60000;
+    private final Handler wallpaperHandler = new Handler(Looper.getMainLooper());
+    private final Runnable wallpaperTick = new Runnable() {
+        @Override public void run() {
+            swapWallpaper();
+            wallpaperHandler.postDelayed(this, WALLPAPER_INTERVAL_MS);
+        }
+    };
     private SpringAnimation springX, springY;
     private float glassTargetX, glassTargetY;
     // How far the grid has scrolled the glass. springY works without it, in grid content space, so a
@@ -134,7 +162,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         @Override
         public void run() {
             updateGreeting();
+            updateClock();
             updateWifiLabel();
+            if (++weatherRefreshCounter >= 30) {   // weather again after ~30 minutes
+                weatherRefreshCounter = 0;
+                refreshWeather();
+            }
             handler.postDelayed(this, MINUTE_MS);
         }
     };
@@ -154,6 +187,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         glass = findViewById(R.id.glass);
         ambient = findViewById(R.id.ambient);
         heroName = findViewById(R.id.heroName);
+        wallpaper = findViewById(R.id.wallpaper);
+        startWallpaperRotation();
         ambientGlow = new GradientDrawable();
         ambientGlow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         ambientGlow.setGradientCenter(0.32f, 0.42f);
@@ -171,6 +206,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             date.setPadding(0, (int) (4 * density), 0, 0);
         }
         vpnApp = getString(R.string.vpn_app).trim();
+        tvClock = findViewById(R.id.clock);
+        tvAmpm = findViewById(R.id.ampm);
+        weatherView = findViewById(R.id.weather);
+        tvClock.setOnClickListener(v -> {
+            force24h = !force24h;
+            updateClock();
+        });
 
         grid = findViewById(R.id.grid);
         grid.setLayoutManager(new GridLayoutManager(this, COLUMNS));
@@ -228,12 +270,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         btnInputs = findViewById(R.id.btnInputs);
         View btnSettings = findViewById(R.id.btnSettings);
+        View btnMirror = findViewById(R.id.btnMirror);
         btnInputs.setOnClickListener(v -> showInputs());
         btnWifi.setOnClickListener(v -> openNetworkPill());
         btnWifi.setOnLongClickListener(v -> {
             open(new Intent(Settings.ACTION_WIFI_SETTINGS));
             return true;
         });
+        btnMirror.setOnClickListener(v -> open(new Intent().setClassName(
+                "com.xiaomi.mitv.smartshare", "com.xiaomi.mitv.smartshare.MainActivity")));
         btnSettings.setOnClickListener(v -> open(new Intent(Settings.ACTION_SETTINGS)));
 
         // Keep focus on the top bar at its ends and at the top: Android's focus finder would otherwise
@@ -250,6 +295,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         };
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
+        btnMirror.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
 
         // Hide the glass when focus leaves the tiles.
@@ -262,11 +308,23 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.registerCallback(inputCallback, handler);
         if (cm != null) {
-            cm.registerDefaultNetworkCallback(networkCallback);
+            try {
+                cm.registerDefaultNetworkCallback(networkCallback);
+            } catch (Throwable ignored) {
+                // registerDefaultNetworkCallback is API 26+; on older Android the
+                // VPN callback below still gives us connectivity changes.
+            }
             cm.registerNetworkCallback(new NetworkRequest.Builder()
                     .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
                     .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                     .build(), vpnCallback);
+        }
+
+        // Xiaomi TV, no root: boot straight into the HDMI1 source instead of the launcher,
+        // once per process, so pressing HOME later returns to the desktop without re-triggering.
+        if (!autoEnteredSource) {
+            autoEnteredSource = true;
+            handler.postDelayed(() -> openXiaomiSource(true, "HDMI 1"), 3000);
         }
     }
 
@@ -284,6 +342,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         adapter.reload();
         grid.scheduleLayoutAnimation();
         updateGreeting();
+        updateClock();
+        refreshWeather();
         updateWifiLabel();
         updateInputsButton();
         handler.postDelayed(minuteTick, MINUTE_MS);
@@ -302,9 +362,123 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         handler.removeCallbacks(minuteTick);
     }
 
+    /** Last HDMI source cycled to by the remote's Input key; 25 = HDMI1, 26 = HDMI2 (Xiaomi T31 mapping). */
+    private int lastHdmiInput = 25;
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_TV_INPUT || keyCode == KeyEvent.KEYCODE_TV) {
+            if (event.getRepeatCount() == 0) cycleHdmiSource();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    /** The remote's Input key cycles HDMI1 <-> HDMI2 through the vendor TV player (no root needed). */
+    private void cycleHdmiSource() {
+        lastHdmiInput = lastHdmiInput == 25 ? 26 : 25;
+        openXiaomiSource(true, "HDMI " + (lastHdmiInput - 24));
+    }
+
+    /** Renders the clock in 12h or 24h (tap the clock to toggle). */
+    private void updateClock() {
+        if (tvClock == null) return;
+        Calendar now = Calendar.getInstance();
+        int h = now.get(Calendar.HOUR_OF_DAY);
+        int min = now.get(Calendar.MINUTE);
+        if (force24h) {
+            tvClock.setText(String.format(Locale.ROOT, "%02d:%02d", h, min));
+            tvAmpm.setText("");
+        } else {
+            int h12 = h % 12;
+            if (h12 == 0) h12 = 12;
+            tvClock.setText(String.format(Locale.ROOT, "%d:%02d", h12, min));
+            tvAmpm.setText(now.get(Calendar.AM_PM) == Calendar.AM ? "AM" : "PM");
+        }
+    }
+
+    /** Weather via the China Weather net (d1.weather.com.cn), free, no key, reachable in mainland China. */
+    private void refreshWeather() {
+        if (weatherView == null) return;
+        final String cityId = getString(R.string.weather_city_id).trim();
+        if (cityId.isEmpty()) return;
+        new Thread(() -> {
+            HttpURLConnection c = null;
+            try {
+                URL url = new URL("http://d1.weather.com.cn/weather_index/" + cityId
+                        + ".html?areaid=" + cityId + "&type=0");
+                c = (HttpURLConnection) url.openConnection();
+                c.setConnectTimeout(12000);
+                c.setReadTimeout(12000);
+                c.setRequestProperty("User-Agent", "Mozilla/5.0 (tv-vibehack)");
+                c.setRequestProperty("Referer", "http://www.weather.com.cn/");
+                InputStream in = c.getInputStream();
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                in.close();
+                // Decode strictly as UTF-8; if that produced replacement chars the page was GBK.
+                String body;
+                byte[] data = out.toByteArray();
+                try {
+                    body = new String(data, "UTF-8");
+                    if (body.indexOf('\uFFFD') >= 0) body = new String(data, "GBK");
+                } catch (Exception e) {
+                    try {
+                        body = new String(data, "GBK");
+                    } catch (Exception e2) {
+                        body = new String(data, "UTF-8");
+                    }
+                }
+                // var cityDZ ={"weatherinfo":{"city":"西宁",...,"temp":"3",...,"weather":"晴转多云",...}}
+                String temp = body.replaceAll(".*\"temp\":\"(-?[0-9.]+)\".*", "$1");
+                String weather = body.replaceAll(".*\"weather\":\"([^\"]*)\".*", "$1");
+                if (temp.equals(body)) return;   // regex did not match
+                final String text = weather + " " + Math.round(Float.parseFloat(temp)) + "°";
+                handler.post(() -> {
+                    weatherView.setText(text);
+                    weatherView.setVisibility(View.VISIBLE);
+                });
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        }).start();
+    }
+
+    private void startWallpaperRotation() {
+        wallpaperIndex = 0;
+        loadWallpaper();
+        wallpaperHandler.removeCallbacks(wallpaperTick);
+        wallpaperHandler.postDelayed(wallpaperTick, WALLPAPER_INTERVAL_MS);
+    }
+
+    private void swapWallpaper() {
+        wallpaperIndex = (wallpaperIndex + 1) % WALLPAPERS.length;
+        loadWallpaper();
+    }
+
+    private void loadWallpaper() {
+        try {
+            Bitmap bmp = BitmapFactory.decodeStream(getAssets().open(WALLPAPERS[wallpaperIndex]));
+            if (bmp != null) {
+                wallpaper.setImageBitmap(bmp);
+                wallpaper.setAlpha(0f);
+                wallpaper.animate().alpha(1f).setDuration(800).start();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void toast(int res) {
+        Toast.makeText(this, res, Toast.LENGTH_SHORT).show();
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        wallpaperHandler.removeCallbacks(wallpaperTick);
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         if (tim != null) tim.unregisterCallback(inputCallback);
@@ -587,6 +761,34 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    /**
+     * Xiaomi TV (no root): switch the external source through the vendor TV player,
+     * because the standard TvContract channel URI host (PatchWall) is uninstalled.
+     * Verified on L50M5-AD / T31: input 1=TV, 2=AV, 25=HDMI1, 26=HDMI2, 27=HDMI3.
+     */
+    private void openXiaomiSource(boolean hdmi, String label) {
+        int input;
+        String upper = label.toUpperCase(Locale.ROOT);
+        if (upper.contains("AV")) {
+            input = 2;
+        } else if (hdmi) {
+            String digits = label.replaceAll("\\D+", "");
+            int port = digits.isEmpty() ? 1 : Integer.parseInt(digits);
+            input = 24 + port; // HDMI1 -> 25
+        } else {
+            input = 1; // TV tuner
+        }
+        Intent ext = new Intent()
+                .setComponent(new ComponentName("com.xiaomi.mitv.tvplayer",
+                        "com.xiaomi.mitv.tvplayer.ExternalSourceActivity"))
+                .putExtra("input", input);
+        try {
+            startActivity(ext);
+        } catch (Exception e) {
+            Toast.makeText(this, R.string.not_available, Toast.LENGTH_SHORT).show();
+        }
+    }
+
     /** Dropdown menu under the Inputs pill: HDMI ports (with connection state), AV and Live TV. */
     private void showInputs() {
         View anchor = findViewById(R.id.btnInputs);
@@ -636,9 +838,10 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 int state = hdmi && hdmiStateBogus ? -1 : tim.getInputState(id);
                 if (!hdmi && rows.getChildCount() > 0 && !sawNonHdmi) addSeparator(rows);
                 if (!hdmi) sawNonHdmi = true;
+                final boolean hdmiFinal = hdmi;
+                final String labelFinal = label;
                 addInputRow(rows, popup, hdmi ? R.drawable.ic_input : R.drawable.ic_av, label, state,
-                        () -> open(new Intent(Intent.ACTION_VIEW).setDataAndType(
-                                TvContract.buildChannelUriForPassthroughInput(id), "vnd.android.cursor.item/channel")));
+                        () -> openXiaomiSource(hdmiFinal, labelFinal));
             }
         }
         // Nothing to list where there is no TvInputManager: the TV's own source panel switches inputs.
@@ -653,8 +856,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         if (liveTv != null) {
             if (rows.getChildCount() > 0) addSeparator(rows);
-            final Intent liveTvIntent = liveTv;
-            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1, () -> open(liveTvIntent));
+            addInputRow(rows, popup, R.drawable.ic_livetv, getString(R.string.live_tv), -1,
+                    () -> openXiaomiSource(false, getString(R.string.live_tv)));
         }
         if (rows.getChildCount() == 0) {
             Toast.makeText(this, R.string.no_inputs, Toast.LENGTH_SHORT).show();

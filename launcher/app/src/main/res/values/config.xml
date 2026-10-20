@@ -13,6 +13,19 @@
         <item>in.startv.hotstar</item>
     </string-array>
 
+    <!-- Quick-launch favourites shown FIRST (dock row on China-market sets): common TV video apps.
+         Only installed packages appear; the grid falls back to showing the rest alphabetically. -->
+    <string-array name="quick_apps">
+        <item>com.qiyi.video.tv</item>      <!-- 爱奇艺 TV -->
+        <item>com.gitv.tv</item>            <!-- GITV 银河奇异果 -->
+        <item>com.tencent.qqlive.tv</item>  <!-- 腾讯视频 TV -->
+        <item>tv.danmaku.bili</item>        <!-- 哔哩哔哩 -->
+        <item>tv.danmaku.bili.tv</item>     <!-- 云视听小电视 -->
+        <item>com.youku.tv</item>           <!-- 优酷 TV -->
+        <item>com.mgtv.tv</item>            <!-- 芒果 TV -->
+        <item>com.hunantv.iol.ott</item>    <!-- 芒果 TV OTT -->
+    </string-array>
+
     <!-- Apps never shown as tiles (e.g. the Live TV app, which the Inputs menu already covers). -->
     <string-array name="hidden_apps">
         <item>com.mediatek.wwtv.tvcenter</item>
@@ -41,6 +54,14 @@
     <string name="vpn_app" translatable="false"></string>
     <!-- Grid rows left visible under the dock on the home screen. 0 = dock sits at the very bottom. -->
     <integer name="rows_below_dock">0</integer>
+
+    <!-- Weather city (China Weather net, free, no key, works behind GFW). City ID for your city;
+         Xining = 101150101. Find yours at https://www.weather.com.cn or search "城市 天气代码". -->
+    <string name="weather_city_id" translatable="false">101150101</string>
+    <!-- Legacy coordinates for the Open-Meteo endpoint (unreachable from mainland networks, kept as
+         a fallback should connectivity change). -->
+    <string name="weather_lat" translatable="false">36.617</string>
+    <string name="weather_lon" translatable="false">101.778</string>
 
     <!-- Tiles per row in the grid; the dock always has this many slots. Tiles are 180dp wide at 4 columns and
          shrink to fit from 5 up (about 144dp at 5, 117dp at 6 on a 1080p TV). -->

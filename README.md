@@ -1,5 +1,46 @@
 # tv-vibehack
 
+## 本分支定制说明（Yskm666 · 小米电视 L50M5-AD）
+
+本分支基于 tv-vibehack 深度定制，目标设备为 **小米电视 4A 50 寸 L50M5-AD**（代号 `xmen`，Amlogic T962 平台，Android 6.0.1 国行 PatchWall 系统），用于**顶替小米原桌面（PatchWall）**：开机直接进入干净桌面，不再有小米广告与商城。
+
+### 定制内容
+
+**兼容性**
+- `minSdk 23` / `targetSdk 23`，兼容 Android 6.0.1（原版要求 API 26+）
+- 移除 Java 8 API（`putIfAbsent` 等）与 `registerDefaultNetworkCallback` 等 API 26+ 调用，已在 Android 6 实测运行
+
+**桌面功能**
+- 顶栏四按钮：**输入源 / 有线网络 / 投屏 / 设置** 一键直达（投屏 = 小米无线投屏 `com.xiaomi.mitv.smartshare`）
+- HDMI 输入源切换（映射：1=TV / 2=AV / 25=HDMI1 / 26=HDMI2 / 27=HDMI3），遥控器信号源键 25↔26 循环切换
+- 开机自动进入 HDMI1（约 3 秒后）
+- 大时钟（点击切换 12/24 小时制）+ 日期 + 实时天气（中国天气网）
+- 应用启动网格（遥控器焦点导航直接启动，支持 `quick_apps` / `dock_apps` 白名单置顶）
+- 4 张暗黑撞色壁纸 60 秒自动轮换
+- `BootReceiver` 开机自启并拉起本桌面，**锁死默认 HOME**（防 PatchWall 守护恢复抢回）
+
+**去广告（ADB 免 root，已实测）**
+- `pm uninstall --user 0 -k` 卸载 30+ 系统应用：广告（`com.miui.systemAdSolution`、`com.xiaomi.mitv.tvpush.tvpushservice`、`com.miui.tv.analytics` 等）、商城（`com.xiaomi.mitv.shop`、`com.xiaomi.mitv.appstore`、游戏中心、`com.mipay.wallet.tv` 等）、预装内容（K 歌、音乐、日历、浏览器、输入法等）、防升级（`upgrade` / `appupgrade`）
+- 广告组件会随重启被系统守护恢复，加 `-k` 参数重复卸载即可彻底移除
+
+### 构建与安装
+
+```bash
+# 构建（Windows）
+set JAVA_HOME=<JDK 17 路径>
+set ANDROID_HOME=<Android SDK 路径>
+cd launcher
+gradlew assembleDebug
+
+# 安装（无线 ADB）
+adb connect <电视IP>:5555
+adb install -r launcher/app/build/outputs/apk/debug/app-debug.apk
+
+# 锁死默认桌面（卸载 PatchWall，重启后本桌面为唯一 HOME）
+adb shell pm uninstall --user 0 -k com.mitv.tvhome
+adb reboot
+```
+
 **Your TV, minus the ads.**
 
 Strip the bloatware from any Android TV or Google TV over Wi-Fi, and replace the ad-filled home

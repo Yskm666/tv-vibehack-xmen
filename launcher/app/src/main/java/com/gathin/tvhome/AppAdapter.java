@@ -94,6 +94,8 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
     private final int dockSize;
     /** Dock order (res/values/config.xml, dock_apps). */
     private final List<String> favourites;
+    /** Quick-launch apps (res/values/config.xml, quick_apps), shown first when installed (video apps etc.). */
+    private final List<String> quickApps;
     /** Never shown as tiles (res/values/config.xml, hidden_apps). */
     private final Set<String> hidden;
     private final List<Entry> items = new ArrayList<>();
@@ -103,6 +105,7 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         this.listener = listener;
         this.dockSize = dockSize;
         this.favourites = Arrays.asList(ctx.getResources().getStringArray(R.array.dock_apps));
+        this.quickApps = Arrays.asList(ctx.getResources().getStringArray(R.array.quick_apps));
         this.hidden = new HashSet<>(Arrays.asList(ctx.getResources().getStringArray(R.array.hidden_apps)));
         // Tiles keep their identity across reload(), so a focused tile stays on its app instead of
         // its view being rebound to whatever app now sits in that slot.
@@ -111,28 +114,41 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
 
     void reload() {
         PackageManager pm = ctx.getPackageManager();
-        Intent probe = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        List<ResolveInfo> found = pm.queryIntentActivities(probe, 0);
-        List<Entry> fresh = new ArrayList<>();
+        // Query BOTH launchers. China-market TVs ship system apps (settings, TV Manager, video apps
+        // like GITV) that only expose the phone launcher entry; a leanback-only probe leaves the
+        // grid empty on those sets.
+        List<ResolveInfo> found = new ArrayList<>();
+        found.addAll(pm.queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER), 0));
+        found.addAll(pm.queryIntentActivities(
+                new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0));
+        // De-duplicate by package, keeping the leanback entry when a package has both.
+        java.util.LinkedHashMap<String, ResolveInfo> byPkg = new java.util.LinkedHashMap<>();
         for (ResolveInfo ri : found) {
             if (ri.activityInfo == null) continue;
             String pkg = ri.activityInfo.packageName;
-            if (pkg.equals(ctx.getPackageName()) || hidden.contains(pkg)) continue;
-            Drawable banner = ri.activityInfo.loadBanner(pm);
-            if (banner == null) banner = ri.activityInfo.applicationInfo.loadBanner(pm);
-            Drawable icon = ri.loadIcon(pm);
-            String label = String.valueOf(ri.loadLabel(pm));
-            fresh.add(new Entry(label, new ComponentName(pkg, ri.activityInfo.name), banner, icon));
+            if (!byPkg.containsKey(pkg)) byPkg.put(pkg, ri);
         }
-        Collections.sort(fresh, (a, b) -> {
-            int fa = favourites.indexOf(a.pkg), fb = favourites.indexOf(b.pkg);
-            if (fa >= 0 || fb >= 0) {
-                if (fa < 0) return 1;
-                if (fb < 0) return -1;
-                return Integer.compare(fa, fb);
-            }
-            return a.label.compareToIgnoreCase(b.label);
-        });
+
+        List<Entry> fresh = new ArrayList<>();
+        // Quick-launch favourites first (config.xml quick_apps): installed video apps etc. They outrank
+        // the legacy dock list, so the dock row becomes "our apps" on China-market sets.
+        List<String> pinned = new ArrayList<>(favourites);
+        for (int i = quickApps.size() - 1; i >= 0; i--) pinned.add(0, quickApps.get(i));
+        for (String pkg : pinned) {
+            ResolveInfo ri = byPkg.remove(pkg);
+            if (ri == null || hidden.contains(pkg) || pkg.equals(ctx.getPackageName())) continue;
+            fresh.add(entry(pm, ri));
+        }
+        // Everything else, alphabetical.
+        List<Entry> rest = new ArrayList<>();
+        for (ResolveInfo ri : byPkg.values()) {
+            String pkg = ri.activityInfo.packageName;
+            if (hidden.contains(pkg) || pkg.equals(ctx.getPackageName())) continue;
+            rest.add(entry(pm, ri));
+        }
+        Collections.sort(rest, (a, b) -> a.label.compareToIgnoreCase(b.label));
+        fresh.addAll(rest);
         // Optional "Default home" tile (config.xml), only when this TV actually has a home-screen picker.
         if (ctx.getResources().getBoolean(R.bool.show_home_settings_shortcut)
                 && pm.resolveActivity(new Intent(Settings.ACTION_HOME_SETTINGS), 0) != null) {
@@ -143,6 +159,14 @@ public class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
         items.clear();
         items.addAll(fresh);
         notifyDataSetChanged();
+    }
+
+    private Entry entry(PackageManager pm, ResolveInfo ri) {
+        Drawable banner = ri.activityInfo.loadBanner(pm);
+        if (banner == null) banner = ri.activityInfo.applicationInfo.loadBanner(pm);
+        Drawable icon = ri.loadIcon(pm);
+        String label = String.valueOf(ri.loadLabel(pm));
+        return new Entry(label, new ComponentName(ri.activityInfo.packageName, ri.activityInfo.name), banner, icon);
     }
 
     @NonNull
